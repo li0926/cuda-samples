@@ -136,6 +136,22 @@ __global__ void testKernel(TData *d_odata, TData *d_idata, int numElements) {
   }
 }
 
+template <class TData>
+__global__ void testKernel2(TData *d_odata, TData *d_idata, int numElements) {
+
+  const int numThreads = blockDim.x * gridDim.x;
+  const int elemPerThread = (numElements + numThreads - 1 )/ numThreads;
+  const int tid = (blockDim.x * blockIdx.x + threadIdx.x) * elemPerThread;
+  const int max = ((tid + elemPerThread) > numElements) ? numElements : (tid + elemPerThread);
+
+  for (int pos = tid; pos < max; pos++) {
+    // if (pos >= numElements) return;
+    d_odata[pos] = d_idata[pos];
+  }
+}
+
+
+
 ////////////////////////////////////////////////////////////////////////////////
 // Validation routine for simple copy kernel.
 // We must know "packed" size of TData (number_of_fields * sizeof(simple_type))
@@ -208,6 +224,43 @@ int runTest(int packedElementSize, int memory_size) {
   return !flag;
 }
 
+
+
+template <class TData>
+int runTest2(int packedElementSize, int memory_size) {
+  const int totalMemSizeAligned = iAlignDown(memory_size, sizeof(TData));
+  const int numElements = iDivDown(memory_size, sizeof(TData));
+
+  // Clean output buffer before current test
+  checkCudaErrors(cudaMemset(d_odata, 0, memory_size));
+  // Run test
+  checkCudaErrors(cudaDeviceSynchronize());
+  sdkResetTimer(&hTimer);
+  sdkStartTimer(&hTimer);
+
+  for (int i = 0; i < NUM_ITERATIONS; i++) {
+    testKernel2<TData>
+        <<<64, 256>>>((TData *)d_odata, (TData *)d_idata, numElements);
+    getLastCudaError("testKernel() execution failed\n");
+  }
+
+  checkCudaErrors(cudaDeviceSynchronize());
+  sdkStopTimer(&hTimer);
+  double gpuTime = sdkGetTimerValue(&hTimer) / NUM_ITERATIONS;
+  printf("Avg. time: %f ms / Copy throughput: %f GB/s.\n", gpuTime,
+         (double)totalMemSizeAligned / (gpuTime * 0.001 * 1073741824.0));
+
+  // Read back GPU results and run validation
+  checkCudaErrors(
+      cudaMemcpy(h_odataGPU, d_odata, memory_size, cudaMemcpyDeviceToHost));
+  int flag = testCPU((TData *)h_odataGPU, (TData *)h_idataCPU, numElements,
+                     packedElementSize);
+
+  printf(flag ? "\tTEST OK\n" : "\tTEST FAILURE\n");
+
+  return !flag;
+}
+
 int main(int argc, char **argv) {
   int i, nTotalFailures = 0;
 
@@ -259,40 +312,53 @@ int main(int argc, char **argv) {
   printf("Testing misaligned types...\n");
   printf("uint8...\n");
   nTotalFailures += runTest<uint8>(1, MemorySize);
+  nTotalFailures += runTest2<uint8>(1, MemorySize);
+
 
   printf("uint16...\n");
   nTotalFailures += runTest<uint16>(2, MemorySize);
+  nTotalFailures += runTest2<uint16>(2, MemorySize);
 
   printf("RGBA8_misaligned...\n");
   nTotalFailures += runTest<RGBA8_misaligned>(4, MemorySize);
+  nTotalFailures += runTest2<RGBA8_misaligned>(4, MemorySize);
 
   printf("LA32_misaligned...\n");
   nTotalFailures += runTest<LA32_misaligned>(8, MemorySize);
+  nTotalFailures += runTest2<LA32_misaligned>(8, MemorySize);
 
   printf("RGB32_misaligned...\n");
   nTotalFailures += runTest<RGB32_misaligned>(12, MemorySize);
-
+  nTotalFailures += runTest2<RGB32_misaligned>(12, MemorySize);
   printf("RGBA32_misaligned...\n");
   nTotalFailures += runTest<RGBA32_misaligned>(16, MemorySize);
+  nTotalFailures += runTest2<RGBA32_misaligned>(16, MemorySize);
 
   printf("Testing aligned types...\n");
   printf("RGBA8...\n");
   nTotalFailures += runTest<RGBA8>(4, MemorySize);
+  nTotalFailures += runTest2<RGBA8>(4, MemorySize);
 
   printf("I32...\n");
   nTotalFailures += runTest<I32>(4, MemorySize);
+  nTotalFailures += runTest2<I32>(4, MemorySize);
+
 
   printf("LA32...\n");
   nTotalFailures += runTest<LA32>(8, MemorySize);
+  nTotalFailures += runTest2<LA32>(8, MemorySize);
 
   printf("RGB32...\n");
   nTotalFailures += runTest<RGB32>(12, MemorySize);
+  nTotalFailures += runTest2<RGB32>(12, MemorySize);
 
   printf("RGBA32...\n");
   nTotalFailures += runTest<RGBA32>(16, MemorySize);
+  nTotalFailures += runTest2<RGBA32>(16, MemorySize);
 
   printf("RGBA32_2...\n");
   nTotalFailures += runTest<RGBA32_2>(32, MemorySize);
+  nTotalFailures += runTest2<RGBA32_2>(32, MemorySize);
 
   printf("\n[alignedTypes] -> Test Results: %d Failures\n", nTotalFailures);
 
